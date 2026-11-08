@@ -32,7 +32,17 @@
 <label><input type="radio" name="m" value="total">合計最短<small>全員の移動時間の合計</small></label>
 <label><input type="radio" name="m" value="adv">冒険モード<small>誰の地元からも遠い街を優先</small></label>
 </div>
-<div class="opt"><label><input type="checkbox" id="hubOnly" checked> 乗換駅(2路線以上)だけを候補にする</label></div>
+<div class="opt">
+  <label>
+  <input type="checkbox" id="hubOnly" checked> 乗換駅(2路線以上)だけを候補にする
+  </label>
+</div>
+
+<!-- <div class="opt">
+  <label>
+  <input type="checkbox" id="useShinkansen" checked> 新幹線を使う
+  </label>
+</div> -->
 </section>
 
 <div style="margin-bottom:8px"><button id="rnd" class="ghost" style="width:100%">🎲 おまかせで発見</button></div>
@@ -61,7 +71,11 @@ let M=0;for(const e of E){if(e[0]>M)M=e[0];if(e[1]>M)M=e[1]}M++;
 const head=new Int32Array(M).fill(-1),nxt=new Int32Array(E.length*2),to=new Int32Array(E.length*2),w=new Float32Array(E.length*2);
 E.forEach((e,i)=>{const a=i*2,b=a+1;to[a]=e[1];w[a]=e[2];nxt[a]=head[e[0]];head[e[0]]=a;to[b]=e[0];w[b]=e[2];nxt[b]=head[e[1]];head[e[1]]=b});
 const members=G.map(()=>[]);NG.forEach((g,n)=>members[g].push(n));
-
+// // 新幹線のエッジを除外
+// function getEdges() {
+//   const use = document.getElementById("useShinkansen").checked;
+//   return use ? edges : edges.filter(e => e.type !== "shinkansen");
+// }
 function dijk(src){
   const dist=new Float64Array(M).fill(Infinity),hk=[],hv=[];
   const push=(k,v)=>{let i=hk.length;hk.push(k);hv.push(v);while(i>0){const p=(i-1)>>1;if(hk[p]<=k)break;hk[i]=hk[p];hv[i]=hv[p];i=p}hk[i]=k;hv[i]=v};
@@ -114,21 +128,30 @@ function compute(){
 }
 function card(r,i){
   const m=Math.max(...r.ts,1),isNew=r.near>15;
-  return `<div class="res ${i===0?"top":""}"><div class="hd"><div><span class="nm">${i==null?"":(i+1)+". "}${G[r.g].n}</span>${isNew?'<span class="new">新しい街</span>':""}<div class="tag">${G[r.g].l.join(" / ")}</div></div>
+  return `<div class="res ${i===sel?"top":""}" ${i==null?"":`data-i="${i}"`}><div class="hd"><div><span class="nm">${i==null?"":(i+1)+". "}${G[r.g].n}</span>${isNew?'<span class="new">新しい街</span>':""}<div class="tag">${G[r.g].l.join(" / ")}</div></div>
   <div style="text-align:right"><b>最大 ${fmt(r.mx)}</b><div class="tag">合計 ${fmt(r.sum)}</div></div></div>
   <div class="bars">${people.map((p,k)=>`<div class="b"><span>${G[p].n}から</span><i style="width:${Math.max(r.ts[k]/m*50,3)}%"></i><em>約${fmt(r.ts[k])}</em></div>`).join("")}</div></div>`;
 }
-let last=[];
+let last=[],sel=0;
 function render(){
   chips("pchips",people);chips("vchips",visited);
   if(people.length<2){
     $("out").innerHTML='<div class="empty">出発駅を2つ以上入れてください</div>';
-    $("pts").innerHTML="";            // 地図の点を消す
+    $("pts").innerHTML="";
     return;
   }
-  last=compute();
+  last=compute();sel=0;
   $("out").innerHTML=last.length?last.slice(0,6).map(card).join(""):'<div class="empty">全員がつながる候補駅が見つかりませんでした(離島などは本州とつながっていません)</div>';
-  if(last.length)drawMap(last[0]);    // ← 地図の描画
+  bindCards();
+  if(last.length)drawMap(last[0]);
+}
+function bindCards(){
+  document.querySelectorAll(".res[data-i]").forEach(el=>el.onclick=()=>{
+    sel=+el.dataset.i;
+    document.querySelectorAll(".res[data-i]").forEach(e=>e.classList.toggle("top",+e.dataset.i===sel));
+    drawMap(last[sel]);
+    $("map").scrollIntoView({behavior:"smooth",block:"nearest"});
+  });
 }
 function decode(flat, q) {
   let x = flat[0], y = flat[1], pts = [[x / q, y / q]];
@@ -157,7 +180,7 @@ document.getElementById("rail").innerHTML = railSvg;
 function drawMap(r) {
   const ids = [...people, r.g];
   const xs = ids.map(g => px(G[g].lng)), ys = ids.map(g => py(G[g].lat));
-  const pad = 6;
+  const pad = 3;
   let x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
   let y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
   const svg = document.getElementById("map");
@@ -167,7 +190,7 @@ function drawMap(r) {
   else { const nh = w / asp; y0 -= (nh - h) / 2; y1 = y0 + nh; }
   svg.setAttribute("viewBox", `${x0} ${y0} ${x1 - x0} ${y1 - y0}`);
 
-  const s = (x1 - x0) / 60;           // 表示範囲に応じた文字・点の大きさ
+  const s = (x1 - x0) / 90;           // 表示範囲に応じた文字・点の大きさ
   const cx = px(G[r.g].lng), cy = py(G[r.g].lat);
   let html = "";
   for (const p of people) {           // 出発駅から候補駅への点線
@@ -191,7 +214,8 @@ $("rnd").onclick=()=>{
   if(people.length<2){alert("先に出発駅を2つ以上入れてください");return}
   const r=compute().filter(x=>x.near>8).slice(0,15);if(!r.length){render();return}
   const p=r[Math.floor(Math.random()*r.length)];
-  $("out").innerHTML='<div class="tag" style="margin:6px 0">🎲 上位候補からランダムに選びました</div>'+card(p,null);
+$("out").innerHTML='<div class="tag" style="margin:6px 0">🎲 上位候補からランダムに選びました</div>'+card(p,null);
+drawMap(p);
 };
 render();
 </script>

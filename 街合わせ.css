@@ -27,7 +27,7 @@ button.ghost{background:var(--ac2);color:var(--ac)}
 .modes label:has(input:checked){border-color:var(--ac);background:var(--ac2)}
 .modes small{display:block;color:var(--mut)}
 .opt{margin-top:10px;font-size:14px}
-.res{border:1px solid var(--bd);border-radius:12px;padding:12px;margin-top:10px}
+.res{border:1px solid var(--bd);border-radius:12px;padding:12px;margin-top:10px;cursor:pointer}
 .res.top{border-color:var(--ac)}
 .hd{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .nm{font-size:20px;font-weight:700}
