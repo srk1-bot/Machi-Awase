@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>まちあわせ探し</title>
+<link rel="stylesheet" href="街合わせ.css">
+</head>
+<body>
+<main>
+<h1>街合わせ</h1>
+<h2>ver 1.0</h2>
+<p class="sub">みんなの最寄り駅を入れると、ちょうどいい待ち合わせ駅を全国の路線網から提案します。一定の確率でちょうど良くない駅も出てきます。あなたの知らない街との出会いも。
+</p>
+
+<section>
+<h2>① みんなの出発駅(2つ以上)</h2>
+<div class="ac"><input type="text" id="pin" placeholder="駅名を入力(例:東京)" autocomplete="off"><div class="sg" id="psg"></div></div>
+<div class="chips" id="pchips"></div>
+</section>
+
+<section>
+<h2>② 行ったことがある駅(任意・除外されます)</h2>
+<div class="ac"><input type="text" id="vin" placeholder="駅名を入力" autocomplete="off"><div class="sg" id="vsg"></div></div>
+<div class="chips" id="vchips"></div>
+</section>
+
+<section>
+<h2>③ 探し方</h2>
+<div class="modes">
+<label><input type="radio" name="m" value="fair" checked>公平重視<small>一番遠い人の負担を小さく</small></label>
+<label><input type="radio" name="m" value="total">合計最短<small>全員の移動時間の合計</small></label>
+<label><input type="radio" name="m" value="adv">冒険モード<small>誰の地元からも遠い街を優先</small></label>
+</div>
+<div class="opt"><label><input type="checkbox" id="hubOnly" checked> 乗換駅(2路線以上)だけを候補にする</label></div>
+</section>
+
+<div style="margin-bottom:8px"><button id="rnd" class="ghost" style="width:100%">🎲 おまかせで発見</button></div>
+<section>
+  <svg id="map" style="width:100%;height:340px;display:block;background:var(--bg);border-radius:10px">
+    <g id="rail"></g>
+    <g id="pts"></g>
+  </svg>
+</section>
+
+<div id="out"></div>
+<p class="note">※ 所要時間は路線網の駅間距離と平均速度からの概算です。各駅停車ベースで、特急・快速・実際のダイヤは考慮していません。実際の経路は乗換案内で確認してください。
+出典：国土交通省国土数値情報ダウンロードサイト　https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N02-v2_3.html
+
+</p>
+</main>
+
+<script type = "module">
+const [D, R] = await Promise.all([
+  fetch("stations.json").then(r => r.json()),
+  fetch("rail_simple.json").then(r => r.json()),
+]);
+// 以降は、これまでの const D=__DATA__; の代わりにこの D を使う
+const G=D.groups,NG=D.node_group,E=D.edges;
+let M=0;for(const e of E){if(e[0]>M)M=e[0];if(e[1]>M)M=e[1]}M++;
+const head=new Int32Array(M).fill(-1),nxt=new Int32Array(E.length*2),to=new Int32Array(E.length*2),w=new Float32Array(E.length*2);
+E.forEach((e,i)=>{const a=i*2,b=a+1;to[a]=e[1];w[a]=e[2];nxt[a]=head[e[0]];head[e[0]]=a;to[b]=e[0];w[b]=e[2];nxt[b]=head[e[1]];head[e[1]]=b});
+const members=G.map(()=>[]);NG.forEach((g,n)=>members[g].push(n));
+
+function dijk(src){
+  const dist=new Float64Array(M).fill(Infinity),hk=[],hv=[];
+  const push=(k,v)=>{let i=hk.length;hk.push(k);hv.push(v);while(i>0){const p=(i-1)>>1;if(hk[p]<=k)break;hk[i]=hk[p];hv[i]=hv[p];i=p}hk[i]=k;hv[i]=v};
+  const pop=()=>{const k0=hk[0],v0=hv[0],k=hk.pop(),v=hv.pop(),n=hk.length;if(n){let i=0;for(;;){let c=2*i+1;if(c>=n)break;if(c+1<n&&hk[c+1]<hk[c])c++;if(hk[c]>=k)break;hk[i]=hk[c];hv[i]=hv[c];i=c}hk[i]=k;hv[i]=v}return[k0,v0]};
+  for(const s of src){dist[s]=0;push(0,s)}
+  while(hk.length){const[d,u]=pop();if(d>dist[u])continue;for(let a=head[u];a>=0;a=nxt[a]){const nd=d+w[a];if(nd<dist[to[a]]){dist[to[a]]=nd;push(nd,to[a])}}}
+  return dist;
+}
+function gdist(dist){return G.map((_,g)=>{let m=Infinity;for(const n of members[g])if(dist[n]<m)m=dist[n];return m})}
+function km(a,b){const r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lng-a.lng)*r,x=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;return 12742*Math.asin(Math.sqrt(x))}
+const fmt=m=>{m=Math.round(m);return m>=60?Math.floor(m/60)+"時間"+(m%60?m%60+"分":""):m+"分"};
+const $=id=>document.getElementById(id);
+const lines=g=>G[g].l.slice(0,2).join(" / ");
+
+let people=[],visited=[];
+function setupAC(inp,sg,list){
+  const el=$(inp),box=$(sg);
+  const show=()=>{
+    const q=el.value.trim();if(!q){box.style.display="none";return}
+    const pre=[],sub=[];
+    for(let g=0;g<G.length&&pre.length<8;g++){const n=G[g].n;if(n.startsWith(q))pre.push(g);else if(sub.length<8&&n.includes(q))sub.push(g)}
+    const r=pre.concat(sub).slice(0,8);
+    box.innerHTML=r.length?r.map(g=>`<div data-g="${g}">${G[g].n}<small>${lines(g)}</small></div>`).join(""):'<div style="color:var(--mut)">見つかりません</div>';
+    box.style.display="block";
+    box.querySelectorAll("[data-g]").forEach(d=>d.onmousedown=e=>{e.preventDefault();pick(+d.dataset.g)});
+  };
+  const pick=g=>{if(!list.includes(g))list.push(g);el.value="";box.style.display="none";render()};
+  el.oninput=show;el.onblur=()=>setTimeout(()=>box.style.display="none",150);
+  el.onkeydown=e=>{if(e.key==="Enter"){const d=box.querySelector("[data-g]");if(d)pick(+d.dataset.g)}};
+}
+function chips(el,list){
+  $(el).innerHTML=list.map((g,i)=>`<span class="chip">${G[g].n}<small>${lines(g)}</small><b data-i="${i}">×</b></span>`).join("");
+  $(el).querySelectorAll("b").forEach(b=>b.onclick=()=>{list.splice(+b.dataset.i,1);render()});
+}
+function compute(){
+  const mode=document.querySelector("input[name=m]:checked").value,hubOnly=$("hubOnly").checked;
+  const ds=people.map(p=>gdist(dijk(members[p])));
+  const out=[];
+  for(let g=0;g<G.length;g++){
+    if(people.includes(g)||visited.includes(g))continue;
+    if(hubOnly&&G[g].l.length<2)continue;
+    const ts=ds.map(d=>d[g]);if(ts.some(t=>!isFinite(t)))continue;
+    const mx=Math.max(...ts),sum=ts.reduce((a,b)=>a+b,0);
+    const near=Math.min(...people.map(p=>km(G[p],G[g])));
+    let score=mode==="total"?sum:mx+sum/ts.length*0.3;
+    if(mode==="adv")score-=Math.min(near,20)*1.2;
+    out.push({g,ts,mx,sum,near,score});
+  }
+  return out.sort((a,b)=>a.score-b.score);
+}
+function card(r,i){
+  const m=Math.max(...r.ts,1),isNew=r.near>15;
+  return `<div class="res ${i===0?"top":""}"><div class="hd"><div><span class="nm">${i==null?"":(i+1)+". "}${G[r.g].n}</span>${isNew?'<span class="new">新しい街</span>':""}<div class="tag">${G[r.g].l.join(" / ")}</div></div>
+  <div style="text-align:right"><b>最大 ${fmt(r.mx)}</b><div class="tag">合計 ${fmt(r.sum)}</div></div></div>
+  <div class="bars">${people.map((p,k)=>`<div class="b"><span>${G[p].n}から</span><i style="width:${Math.max(r.ts[k]/m*50,3)}%"></i><em>約${fmt(r.ts[k])}</em></div>`).join("")}</div></div>`;
+}
+let last=[];
+function render(){
+  chips("pchips",people);chips("vchips",visited);
+  if(people.length<2){
+    $("out").innerHTML='<div class="empty">出発駅を2つ以上入れてください</div>';
+    $("pts").innerHTML="";            // 地図の点を消す
+    return;
+  }
+  last=compute();
+  $("out").innerHTML=last.length?last.slice(0,6).map(card).join(""):'<div class="empty">全員がつながる候補駅が見つかりませんでした(離島などは本州とつながっていません)</div>';
+  if(last.length)drawMap(last[0]);    // ← 地図の描画
+}
+function decode(flat, q) {
+  let x = flat[0], y = flat[1], pts = [[x / q, y / q]];
+  for (let i = 2; i < flat.length; i += 2) {
+    x += flat[i]; y += flat[i + 1];
+    pts.push([x / q, y / q]);
+  }
+  return pts;
+}
+// 緯度経度 → SVG座標(中緯度なので、経度を cos(緯度) 倍して歪みを抑える)
+const K = Math.cos(36 * Math.PI / 180);
+const px = (lng) => lng * K * 20;      // 倍率は表示に合わせて調整
+const py = (lat) => -lat * 20;         // SVGは上が小さいので反転
+const path = (pts) => "M" + pts.map(p => px(p[0]).toFixed(1) + " " + py(p[1]).toFixed(1)).join("L");
+// 路線は最初に1回だけ描く(種別ごとに太さ・色を変える)
+const STYLE = { "1": ["#e63946", 1.6], "2": ["#888", 0.9] };   // 1=新幹線, 2=JR在来線
+const railSvg = Object.entries(R.lines).map(([k, ls]) => {
+  const [col, wd] = STYLE[k] || ["#bbb", 0.6];
+  const d = ls.map(f => path(decode(f, R.q))).join("");
+  return `<path d="${d}" fill="none" stroke="${col}" stroke-width="${wd}"
+          vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+}).join("");
+document.getElementById("rail").innerHTML = railSvg;
+
+// 出発駅と候補駅が収まるように表示範囲を決め、点を描く
+function drawMap(r) {
+  const ids = [...people, r.g];
+  const xs = ids.map(g => px(G[g].lng)), ys = ids.map(g => py(G[g].lat));
+  const pad = 6;
+  let x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
+  let y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+  const svg = document.getElementById("map");
+  // 枠の縦横比に合わせて、範囲を広げる
+  const asp = svg.clientWidth / svg.clientHeight, w = x1 - x0, h = y1 - y0;
+  if (w / h < asp) { const nw = h * asp; x0 -= (nw - w) / 2; x1 = x0 + nw; }
+  else { const nh = w / asp; y0 -= (nh - h) / 2; y1 = y0 + nh; }
+  svg.setAttribute("viewBox", `${x0} ${y0} ${x1 - x0} ${y1 - y0}`);
+
+  const s = (x1 - x0) / 60;           // 表示範囲に応じた文字・点の大きさ
+  const cx = px(G[r.g].lng), cy = py(G[r.g].lat);
+  let html = "";
+  for (const p of people) {           // 出発駅から候補駅への点線
+    html += `<line x1="${px(G[p].lng)}" y1="${py(G[p].lat)}" x2="${cx}" y2="${cy}"
+             stroke="#d9531e" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke" opacity=".6"/>`;
+  }
+  for (const p of people) {
+    html += `<circle cx="${px(G[p].lng)}" cy="${py(G[p].lat)}" r="${s*1.2}" fill="#2a7de1"/>
+             <text x="${px(G[p].lng) + s*1.8}" y="${py(G[p].lat) + s*0.5}" font-size="${s*1.8}" fill="currentColor">${G[p].n}</text>`;
+  }
+  html += `<circle cx="${cx}" cy="${cy}" r="${s*1.8}" fill="#d9531e"/>
+           <text x="${cx + s*2.4}" y="${cy + s*0.6}" font-size="${s*2.4}" font-weight="700" fill="currentColor">${G[r.g].n}</text>`;
+  document.getElementById("pts").innerHTML = html;
+}
+
+
+setupAC("pin","psg",people);setupAC("vin","vsg",visited);
+document.querySelectorAll("input[name=m]").forEach(r=>r.onchange=render);
+$("hubOnly").onchange=render;
+$("rnd").onclick=()=>{
+  if(people.length<2){alert("先に出発駅を2つ以上入れてください");return}
+  const r=compute().filter(x=>x.near>8).slice(0,15);if(!r.length){render();return}
+  const p=r[Math.floor(Math.random()*r.length)];
+  $("out").innerHTML='<div class="tag" style="margin:6px 0">🎲 上位候補からランダムに選びました</div>'+card(p,null);
+};
+render();
+</script>
+</body>
+</html>
